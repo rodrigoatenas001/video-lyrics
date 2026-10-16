@@ -1,0 +1,18 @@
+# Lista blanca: solo se publica el código y sus recursos.
+# Todo lo demás (canciones, letras, videos, logos, fondos, configuración personal) queda fuera.
+/*
+!/.gitignore
+!/lyrics_app.py
+!/requirements.txt
+!/requirements-voz.txt
+!/README.md
+!/LICENSE
+!/VideoLyrics.bat
+!/fonts/
+!/plantillas/
+
+# De plantillas solo las guías de zonas seguras (los logos son personales)
+/plantillas/*
+!/plantillas/guia_*.png
+
+__pycache__/

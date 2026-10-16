@@ -1,0 +1,4 @@
+# Opcional: separación de voz con Demucs (karaoke más preciso). Unos 2 GB.
+# Instalar torch para CPU primero:
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+demucs>=4.0
