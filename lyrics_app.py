@@ -37,7 +37,7 @@ POSICIONES = ["Abajo (subtítulos)", "Centro", "Derecha", "Izquierda"]
 COLORES = ["Automático", "Letra clara (fondo oscuro)", "Letra oscura (fondo claro)"]
 ESQUINAS = ["Arriba centro", "Arriba derecha","Arriba izquierda", "Abajo derecha", "Abajo izquierda"]
 EXPORTAR = ["Canción completa", "Fragmento corto (TikTok / Reels)", "Ambos", "Solo audio del corto (MP3)"]
-FRAGMENTOS = ["Mejor parte (automático)", "Primer coro", "Último coro", "Desde un minuto exacto"]
+FRAGMENTOS = ["Segundo coro", "Mejor parte (automático)", "Primer coro", "Último coro", "Desde un minuto exacto"]
 DURACIONES = ["Coro completo", "15 s", "30 s", "45 s", "60 s"]
 EFECTOS = ["Fundido (una línea)", "Karaoke palabra por palabra", "Dos líneas (actual + siguiente)",
            "Karaoke + dos líneas", "Palabra por palabra (aparecen)", "Máquina de escribir"]
@@ -315,7 +315,7 @@ def calcular_fragmento(data, cfg, audio=None):
         coros = bloques_coro(data["lineas"])
         if not coros:
             raise RuntimeError("La letra no tiene secciones [Chorus]/[Coro]; usa «Desde un minuto exacto».")
-        c = coros[0] if modo == "Primer coro" else coros[-1]
+        c = {"Primer coro": coros[0], "Segundo coro": coros[min(1, len(coros) - 1)]}.get(modo, coros[-1])
         ini, fin_coro = max(0.0, c[0] - 1.0), c[1] + 1.5
     if dur_txt == "Coro completo":
         d = (fin_coro - ini) if fin_coro else 30.0
@@ -1118,6 +1118,7 @@ class App(BaseTk):
         self.efecto = tk.StringVar(value=c.get("efecto", EFECTOS[0]))
         self.pop_on = tk.BooleanVar(value=c.get("pop_on", False))
         self.brillo_on = tk.BooleanVar(value=c.get("brillo_on", False))
+        self.mp3_on = tk.BooleanVar(value=c.get("mp3_on", True))
         self.karaoke_ajuste = tk.DoubleVar(value=c.get("karaoke_ajuste", 0.0))
         self.tono = tk.StringVar(value=c.get("tono", "Original"))
         self.tono_intensidad = tk.IntVar(value=c.get("tono_intensidad", 70))
@@ -1343,6 +1344,8 @@ class App(BaseTk):
         self.cb_dur.pack(side="left", padx=4)
         ttk.Label(f, text="El corto sale con fundido de entrada y salida, listo para TikTok, Reels o Shorts.",
                   foreground="#7a6046").grid(row=8, column=1, sticky="w", padx=6)
+        ttk.Checkbutton(f, text="Incluir siempre el audio del fragmento en MP3 (sonido para TikTok)",
+                        variable=self.mp3_on).grid(row=10, column=1, sticky="w", padx=6, pady=(8, 0))
         for var in (self.exportar, self.frag_modo):
             var.trace_add("write", lambda *a: self.estado_fragmento())
         self.estado_fragmento()
@@ -1381,7 +1384,7 @@ class App(BaseTk):
 
     def ajustes(self):
         return dict(fuente=self.fuente.get(), pos=self.pos.get(), tamano=int(self.tamano.get()), efecto=self.efecto.get(),
-                    pop_on=self.pop_on.get(), brillo_on=self.brillo_on.get(), karaoke_ajuste=round(self.karaoke_ajuste.get(), 2),
+                    pop_on=self.pop_on.get(), brillo_on=self.brillo_on.get(), mp3_on=self.mp3_on.get(), karaoke_ajuste=round(self.karaoke_ajuste.get(), 2),
                     tono=self.tono.get(), tono_intensidad=int(self.tono_intensidad.get()), separar_voz=self.separar_voz.get(),
                     color=self.color.get(), modelo=self.modelo.get(), prev_fmt=self.prev_fmt.get(),
                     formatos=[k for k, v in self.fmt_on.items() if v.get()],
@@ -1589,15 +1592,17 @@ class App(BaseTk):
             data = obtener_sincronizacion(audio, letra, cfg["modelo"], self.resinc.get(), self.log, cfg["separar_voz"])
             self.after(0, lambda: self.resinc.set(False))
             base = os.path.splitext(self.v["salida"].get().strip())[0]
-            if cfg["exportar"] == EXPORTAR[3]:
+            if cfg["exportar"] == EXPORTAR[3] or cfg.get("mp3_on", True):
                 ini, d = calcular_fragmento(data, cfg, audio)
                 salida = f"{base} corto.mp3"
                 self.log(f"Audio: desde {int(ini // 60)}:{ini % 60:05.2f}, {d:.0f} s…")
                 exportar_audio(audio, ini, d, salida)
-                self.progreso(1.0)
+                hechos.append(salida)
                 self.log(f"   ✔ {salida}")
-                self.after(0, lambda: messagebox.showinfo("Listo", "Audio creado: " + salida))
-                return
+                if cfg["exportar"] == EXPORTAR[3]:
+                    self.progreso(1.0)
+                    self.after(0, lambda: messagebox.showinfo("Listo", "Audio creado: " + salida))
+                    return
             logos = self.logos_activos()
             trabajos = []  # (formato, inicio o None, duración)
             if cfg["exportar"] != EXPORTAR[1]:
@@ -1628,7 +1633,7 @@ class App(BaseTk):
                            lambda f, n=n: self.progreso((n + f) / len(trabajos)), inicio=ini)
                 hechos.append(salida)
                 self.log(f"   ✔ {salida}")
-            self.after(0, lambda: messagebox.showinfo("Listo", "Videos creados:\n" + "\n".join(hechos)))
+            self.after(0, lambda: messagebox.showinfo("Listo", "Archivos creados:\n" + "\n".join(hechos)))
         except Exception as e:
             self.log(f"✖ Error: {e}")
             self.after(0, lambda: messagebox.showerror("Error", str(e)[:800]))
