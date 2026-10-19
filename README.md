@@ -9,6 +9,8 @@ Pensada para músicos que publican en YouTube, TikTok, Reels o Shorts.
 - **Sincroniza la letra sola** con la voz, línea por línea y palabra por palabra. Incluye un editor de tiempos para corregir a mano.
 - **Formatos:** 16:9 (YouTube), 9:16 (TikTok / Reels / Shorts) y 1:1 (Instagram), uno o todos de una vez.
 - **Fragmentos cortos:** la mejor parte (automático: la zona más fuerte de la canción, priorizando el coro y empezando al inicio de un verso), primer coro, último coro o desde un minuto exacto, con fundidos de entrada y salida.
+- **Masterización inicial:** antes de todo crea `<canción> master.wav` (24 bits, para SoundOn). Con una canción de referencia usa [Matchering](https://github.com/sergree/matchering); sin ella, la lleva a −14 LUFS con pico de −1 dB. Botones para escuchar original y master.
+- **Archivos para SoundOn:** letra sincronizada en `.lrc` y un `SoundOn.txt` con el minuto de inicio del clip de TikTok.
 - **Solo audio:** exporta el fragmento como MP3 de 30 s para subirlo como sonido a TikTok o CapCut.
 - **Efectos de letra:** fundido, karaoke palabra por palabra, dos líneas (actual + siguiente), palabra por palabra, máquina de escribir, entrada con "pop" y brillo en el coro.
 - **Color automático de la letra:** clara u oscura según el brillo del fondo, en la zona donde va el texto.
@@ -37,6 +39,12 @@ ffmpeg se descarga solo al instalar (paquete `imageio-ffmpeg`). La primera sincr
 ```bash
 .venv\Scripts\python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
 .venv\Scripts\python -m pip install -r requirements-voz.txt
+```
+
+**Opcional — masterización con referencia** (Matchering):
+
+```bash
+.venv\Scripts\python -m pip install -r requirements-master.txt
 ```
 
 ## Uso

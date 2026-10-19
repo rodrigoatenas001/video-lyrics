@@ -860,6 +860,117 @@ def render(fondo, audio, logo, ass_path, w, h, dur, salida, paleta, cfg, log, pr
     progreso(1.0)
 
 
+# ---------- Masterización ----------
+
+def matchering_disponible():
+    try:
+        import matchering  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _loudnorm_medir(audio, filtros):
+    """Primera pasada de loudnorm: mide el volumen real tras `filtros`."""
+    r = run([FFMPEG, "-hide_banner", "-i", audio, "-af", filtros + ",loudnorm=I=-14:TP=-1:LRA=11:print_format=json",
+             "-f", "null", "-"])
+    txt = r.stderr.decode("utf8", "ignore")
+    return json.loads(txt[txt.rindex("{"):txt.rindex("}") + 1])
+
+
+def masterizar_ffmpeg(audio, salida):
+    """Master sin referencia: limpia graves inaudibles, compresión suave y volumen a −14 LUFS (2 pasadas)."""
+    base = ("highpass=f=28,equalizer=f=250:t=q:w=1:g=-1.5,equalizer=f=11000:t=h:w=0.7:g=1.5,"
+            "acompressor=threshold=-18dB:ratio=2:attack=20:release=200:makeup=2")
+    m = _loudnorm_medir(audio, base)
+    ln = (f"loudnorm=I=-14:TP=-1:LRA=11:measured_I={m['input_i']}:measured_TP={m['input_tp']}:"
+          f"measured_LRA={m['input_lra']}:measured_thresh={m['input_thresh']}:offset={m['target_offset']}:linear=true")
+    r = run([FFMPEG, "-y", "-v", "error", "-i", audio, "-af", f"{base},{ln},alimiter=limit=0.89:level=false",
+             "-ar", "44100", "-c:a", "pcm_s24le", salida])
+    if r.returncode:
+        raise RuntimeError(r.stderr.decode("utf8", "ignore")[-800:])
+
+
+def masterizar_matchering(audio, referencia, salida, td):
+    """Master con referencia: Matchering iguala ecualización, volumen y brillo a una canción publicada."""
+    import matchering as mg
+
+    def a_wav(p, nombre):  # Matchering lee WAV/FLAC; los demás formatos se convierten antes
+        if p.lower().endswith((".wav", ".flac")):
+            return p
+        out = os.path.join(td, nombre)
+        run([FFMPEG, "-y", "-v", "error", "-i", p, "-ar", "44100", out])
+        return out
+    mg.log(warning_handler=lambda *a: None, info_handler=lambda *a: None)
+    mg.process(target=a_wav(audio, "mezcla.wav"), reference=a_wav(referencia, "ref.wav"),
+               results=[mg.pcm24(salida)])
+
+
+def masterizar(audio, referencia, log):
+    """Ruta del master (`<audio> master.wav`), creándolo si no existe o si la mezcla/referencia cambió."""
+    salida = os.path.splitext(audio)[0] + " master.wav"
+    firma = os.path.splitext(audio)[0] + ".master.json"
+    usar_ref = bool(referencia and os.path.exists(referencia) and matchering_disponible())
+    clave = {"audio": os.path.getmtime(audio), "ref": referencia if usar_ref else "",
+             "ref_t": os.path.getmtime(referencia) if usar_ref else 0, "v": 1}
+    try:
+        if os.path.exists(salida) and json.load(open(firma, encoding="utf8")) == clave:
+            log("Master ya creado; se reutiliza.")
+            return salida
+    except (OSError, ValueError):
+        pass
+    if referencia and not usar_ref:
+        log("⚠ Matchering no está instalado; se masteriza sin referencia (ver README).")
+    log("Masterizando " + ("con referencia «" + os.path.basename(referencia) + "»…" if usar_ref else "(−14 LUFS)…"))
+    with tempfile.TemporaryDirectory() as td:
+        if usar_ref:
+            masterizar_matchering(audio, referencia, salida, td)
+        else:
+            masterizar_ffmpeg(audio, salida)
+    json.dump(clave, open(firma, "w", encoding="utf8"))
+    log(f"   ✔ {salida}")
+    return salida
+
+
+def detener_audio():
+    import winsound
+    winsound.PlaySound(None, 0)
+
+
+def reproducir(audio, desde, dur=20.0):
+    """Escucha `dur` s de `audio` desde `desde` (WAV temporal + winsound, sin ventanas)."""
+    import winsound
+    tmp = os.path.join(tempfile.gettempdir(), "videolyrics_escucha.wav")
+    winsound.PlaySound(None, 0)
+    r = run([FFMPEG, "-y", "-v", "error", "-ss", f"{desde:.2f}", "-t", f"{dur:.2f}", "-i", audio,
+             "-ar", "44100", "-c:a", "pcm_s16le", tmp])
+    if r.returncode:
+        raise RuntimeError(r.stderr.decode("utf8", "ignore")[-400:])
+    winsound.PlaySound(tmp, winsound.SND_FILENAME | winsound.SND_ASYNC)
+
+
+# ---------- Archivos para SoundOn ----------
+
+def _mmss(t):
+    return f"{int(t // 60):02d}:{t % 60:05.2f}"
+
+
+def exportar_lrc(lineas, titulo, salida):
+    """Letra sincronizada en formato LRC (Musixmatch, distribuidoras, reproductores)."""
+    out = ([f"[ti:{titulo}]"] if titulo else []) + [f"[{_mmss(l['start'])}]{l['text']}" for l in lineas]
+    with open(salida, "w", encoding="utf8") as fh:
+        fh.write("\n".join(out) + "\n")
+
+
+def exportar_info_soundon(ini, d, modo, salida):
+    with open(salida, "w", encoding="utf8") as fh:
+        fh.write("Datos para SoundOn / TikTok\n\n"
+                 f"Inicio del clip de TikTok: {int(ini // 60)}:{int(ini % 60):02d}  ({ini:.1f} s)\n"
+                 f"Duración del fragmento:    {d:.0f} s\n"
+                 f"Criterio:                  {modo}\n\n"
+                 "Al subir la canción a SoundOn, usa este minuto como inicio de la vista previa en TikTok.\n")
+
+
 def exportar_audio(audio, ini, dur, salida):
     """Fragmento de audio con fundidos, en MP3 320 kbps (para subir como sonido a TikTok o CapCut)."""
     r = run([FFMPEG, "-y", "-v", "error", "-ss", f"{ini:.2f}", "-t", f"{dur:.2f}", "-i", audio,
@@ -1119,6 +1230,8 @@ class App(BaseTk):
         self.pop_on = tk.BooleanVar(value=c.get("pop_on", False))
         self.brillo_on = tk.BooleanVar(value=c.get("brillo_on", False))
         self.mp3_on = tk.BooleanVar(value=c.get("mp3_on", True))
+        self.master_on = tk.BooleanVar(value=c.get("master_on", True))
+        self.v["referencia"] = tk.StringVar(value=c.get("referencia", ""))
         self.karaoke_ajuste = tk.DoubleVar(value=c.get("karaoke_ajuste", 0.0))
         self.tono = tk.StringVar(value=c.get("tono", "Original"))
         self.tono_intensidad = tk.IntVar(value=c.get("tono_intensidad", 70))
@@ -1184,6 +1297,39 @@ class App(BaseTk):
             self.fila_archivo(f, r, k, lbl, tipo)
         ttk.Label(f, text="Si un formato no tiene fondo propio, usa el de otro formato (recortado).",
                   foreground="#7a6046").grid(row=len(self.CAMPOS), column=1, sticky="w", pady=(4, 0))
+        r = len(self.CAMPOS) + 1
+        ttk.Separator(f).grid(row=r, column=0, columnspan=4, sticky="ew", pady=8)
+        ttk.Checkbutton(f, text="Masterizar el audio antes de todo (crea «<canción> master.wav» para SoundOn)",
+                        variable=self.master_on).grid(row=r + 1, column=1, sticky="w", padx=6)
+        self.fila_archivo(f, r + 2, "referencia", "Referencia (opcional)", "audio")
+        ttk.Label(f, text=("Con referencia, Matchering iguala tu mezcla a esa canción; sin ella, se lleva a −14 LUFS."
+                           if matchering_disponible() else
+                           "Sin Matchering instalado se masteriza a −14 LUFS (ver README para usar referencia)."),
+                  foreground="#7a6046").grid(row=r + 3, column=1, sticky="w", padx=6)
+        fe = ttk.Frame(f); fe.grid(row=r + 4, column=1, sticky="w", padx=6, pady=(6, 0))
+        ttk.Button(fe, text="▶ Original", command=lambda: self.escuchar(False)).pack(side="left")
+        ttk.Button(fe, text="▶ Master", command=lambda: self.escuchar(True)).pack(side="left", padx=4)
+        ttk.Button(fe, text="■", width=3, command=detener_audio).pack(side="left")
+        ttk.Label(fe, text="  20 s desde el fragmento elegido", foreground="#7a6046").pack(side="left")
+
+    def escuchar(self, master):
+        audio = self.v["audio"].get().strip()
+        if not audio:
+            messagebox.showwarning("Falta algo", "Elige el audio primero."); return
+        cfg = self.ajustes()
+
+        def tarea():
+            try:
+                desde = 60.0
+                sinc = os.path.splitext(audio)[0] + ".lineas.json"
+                if os.path.exists(sinc):
+                    with open(sinc, encoding="utf8") as fh:
+                        desde = calcular_fragmento(json.load(fh), cfg, audio)[0]
+                p = masterizar(audio, cfg["referencia"], self.log) if master else audio
+                reproducir(p, desde)
+            except Exception as e:
+                self.log(f"✖ Error: {e}")
+        threading.Thread(target=tarea, daemon=True).start()
 
     def tab_fondo_ia(self, nb):
         f = ttk.Frame(nb, padding=10); f.columnconfigure(1, weight=1); nb.add(f, text="Fondo con IA")
@@ -1384,7 +1530,7 @@ class App(BaseTk):
 
     def ajustes(self):
         return dict(fuente=self.fuente.get(), pos=self.pos.get(), tamano=int(self.tamano.get()), efecto=self.efecto.get(),
-                    pop_on=self.pop_on.get(), brillo_on=self.brillo_on.get(), mp3_on=self.mp3_on.get(), karaoke_ajuste=round(self.karaoke_ajuste.get(), 2),
+                    pop_on=self.pop_on.get(), brillo_on=self.brillo_on.get(), mp3_on=self.mp3_on.get(), master_on=self.master_on.get(), referencia=self.v["referencia"].get(), karaoke_ajuste=round(self.karaoke_ajuste.get(), 2),
                     tono=self.tono.get(), tono_intensidad=int(self.tono_intensidad.get()), separar_voz=self.separar_voz.get(),
                     color=self.color.get(), modelo=self.modelo.get(), prev_fmt=self.prev_fmt.get(),
                     formatos=[k for k, v in self.fmt_on.items() if v.get()],
@@ -1592,6 +1738,13 @@ class App(BaseTk):
             data = obtener_sincronizacion(audio, letra, cfg["modelo"], self.resinc.get(), self.log, cfg["separar_voz"])
             self.after(0, lambda: self.resinc.set(False))
             base = os.path.splitext(self.v["salida"].get().strip())[0]
+            if cfg.get("master_on"):  # la sincronización usa la mezcla; todo lo que se exporta, el master
+                audio = masterizar(audio, cfg.get("referencia"), self.log)
+                hechos.append(audio)
+            exportar_lrc(data["lineas"], leer_titulo(letra), base + ".lrc")
+            ini_c, d_c = calcular_fragmento(data, cfg, audio)
+            exportar_info_soundon(ini_c, d_c, cfg["frag_modo"], base + " SoundOn.txt")
+            hechos += [base + ".lrc", base + " SoundOn.txt"]
             if cfg["exportar"] == EXPORTAR[3] or cfg.get("mp3_on", True):
                 ini, d = calcular_fragmento(data, cfg, audio)
                 salida = f"{base} corto.mp3"
