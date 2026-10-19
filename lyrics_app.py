@@ -36,8 +36,8 @@ TEXT_EXT = (".md", ".txt")
 POSICIONES = ["Abajo (subtítulos)", "Centro", "Derecha", "Izquierda"]
 COLORES = ["Automático", "Letra clara (fondo oscuro)", "Letra oscura (fondo claro)"]
 ESQUINAS = ["Arriba centro", "Arriba derecha","Arriba izquierda", "Abajo derecha", "Abajo izquierda"]
-EXPORTAR = ["Canción completa", "Fragmento corto (TikTok / Reels)", "Ambos"]
-FRAGMENTOS = ["Primer coro", "Último coro", "Desde un minuto exacto"]
+EXPORTAR = ["Canción completa", "Fragmento corto (TikTok / Reels)", "Ambos", "Solo audio del corto (MP3)"]
+FRAGMENTOS = ["Mejor parte (automático)", "Primer coro", "Último coro", "Desde un minuto exacto"]
 DURACIONES = ["Coro completo", "15 s", "30 s", "45 s", "60 s"]
 EFECTOS = ["Fundido (una línea)", "Karaoke palabra por palabra", "Dos líneas (actual + siguiente)",
            "Karaoke + dos líneas", "Palabra por palabra (aparecen)", "Máquina de escribir"]
@@ -258,7 +258,48 @@ def parse_tiempo(txt):
     return float(txt)
 
 
-def calcular_fragmento(data, cfg):
+def energia_audio(audio, paso=0.5):
+    """Volumen (dB RMS) del audio cada `paso` segundos, leído en mono a baja frecuencia."""
+    sr = 8000
+    r = run([FFMPEG, "-v", "error", "-i", audio, "-ac", "1", "-ar", str(sr), "-f", "f32le", "-"])
+    x = np.frombuffer(r.stdout, dtype=np.float32)
+    n = int(sr * paso)
+    if len(x) < n:
+        return np.zeros(1)
+    x = x[: len(x) // n * n].reshape(-1, n)
+    return 20 * np.log10(np.sqrt((x ** 2).mean(axis=1)) + 1e-6)
+
+
+def mejor_parte(audio, data, d, paso=0.5):
+    """Inicio de la ventana de `d` s más fuerte de la canción, premiando el coro y
+    arrancando al comienzo de un verso para que no empiece a mitad de frase."""
+    db = energia_audio(audio, paso)
+    total = data["duracion"]
+    if total <= d + 1:
+        return 0.0
+    rel = np.clip((db - np.percentile(db, 10)) / max(1e-6, np.percentile(db, 95) - np.percentile(db, 10)), 0, 1)
+    coro = np.zeros(len(db))
+    for a, b in bloques_coro(data["lineas"]):
+        coro[int(a / paso):int(b / paso) + 1] = 1
+    k = int(d / paso)
+    acum = lambda v: np.concatenate([[0], np.cumsum(v)])
+    cr, cc = acum(rel), acum(coro)
+    # candidatos: un poco antes de cada línea (las frases bien cortadas suenan mejor) y, si no hay letra, cada 0,5 s
+    inicios = sorted({max(0.0, l["start"] - 0.6) for l in data["lineas"]}) or list(np.arange(0, total - d, paso))
+    mejor, puntaje = 0.0, -1.0
+    for t in inicios:
+        i = int(t / paso)
+        if t + d > total or i + k >= len(cr):
+            continue
+        # energía media + coro presente + subida al arrancar (el "drop") − arrancar muy al inicio
+        sube = rel[i:i + int(4 / paso)].mean() - rel[max(0, i - int(4 / paso)):i].mean() if i else 0
+        p = (cr[i + k] - cr[i]) / k + 0.6 * (cc[i + k] - cc[i]) / k + 0.3 * max(0, sube) - (0.3 if t < 15 else 0)
+        if p > puntaje:
+            mejor, puntaje = t, p
+    return mejor
+
+
+def calcular_fragmento(data, cfg, audio=None):
     """(inicio, duración) del corto según la configuración."""
     total = data["duracion"]
     dur_txt = cfg.get("frag_dur", DURACIONES[0])
@@ -266,6 +307,10 @@ def calcular_fragmento(data, cfg):
     if modo.startswith("Desde"):
         ini = max(0.0, min(parse_tiempo(cfg.get("frag_inicio") or "0"), total - 5))
         fin_coro = None
+    elif modo.startswith("Mejor"):
+        d = 30.0 if dur_txt == "Coro completo" else float(dur_txt.split()[0])
+        d = max(5.0, min(d, total))
+        return round(mejor_parte(audio, data, d), 2), round(d, 2)
     else:
         coros = bloques_coro(data["lineas"])
         if not coros:
@@ -813,6 +858,15 @@ def render(fondo, audio, logo, ass_path, w, h, dur, salida, paleta, cfg, log, pr
     if p.wait() != 0:
         raise RuntimeError(err[-1500:])
     progreso(1.0)
+
+
+def exportar_audio(audio, ini, dur, salida):
+    """Fragmento de audio con fundidos, en MP3 320 kbps (para subir como sonido a TikTok o CapCut)."""
+    r = run([FFMPEG, "-y", "-v", "error", "-ss", f"{ini:.2f}", "-t", f"{dur:.2f}", "-i", audio,
+             "-af", f"afade=t=in:d=0.6,afade=t=out:st={dur - 1.8:.2f}:d=1.8",
+             "-c:a", "libmp3lame", "-b:a", "320k", salida])
+    if r.returncode:
+        raise RuntimeError(r.stderr.decode("utf8", "ignore")[-800:])
 
 
 # ---------- Editor de tiempos ----------
@@ -1516,9 +1570,10 @@ class App(BaseTk):
         formatos = [k for k, v in self.fmt_on.items() if v.get()]
         faltan = [n for k, n in (("audio", "el audio"), ("letra", "la letra"), ("salida", "dónde guardar"))
                   if not self.v[k].get().strip()]
-        if not formatos:
+        solo_audio = self.exportar.get() == EXPORTAR[3]
+        if not formatos and not solo_audio:
             faltan.insert(0, "al menos un formato (pestaña Exportar)")
-        if not self.fondo_para("16:9"):
+        if not solo_audio and not self.fondo_para("16:9"):
             faltan.insert(0, "un fondo")
         if faltan:
             messagebox.showwarning("Falta algo", "Elige " + ", ".join(faltan) + "."); return
@@ -1534,12 +1589,21 @@ class App(BaseTk):
             data = obtener_sincronizacion(audio, letra, cfg["modelo"], self.resinc.get(), self.log, cfg["separar_voz"])
             self.after(0, lambda: self.resinc.set(False))
             base = os.path.splitext(self.v["salida"].get().strip())[0]
+            if cfg["exportar"] == EXPORTAR[3]:
+                ini, d = calcular_fragmento(data, cfg, audio)
+                salida = f"{base} corto.mp3"
+                self.log(f"Audio: desde {int(ini // 60)}:{ini % 60:05.2f}, {d:.0f} s…")
+                exportar_audio(audio, ini, d, salida)
+                self.progreso(1.0)
+                self.log(f"   ✔ {salida}")
+                self.after(0, lambda: messagebox.showinfo("Listo", "Audio creado: " + salida))
+                return
             logos = self.logos_activos()
             trabajos = []  # (formato, inicio o None, duración)
             if cfg["exportar"] != EXPORTAR[1]:
                 trabajos += [(fmt, None, data["duracion"]) for fmt in formatos]
             if cfg["exportar"] != EXPORTAR[0]:
-                ini, d = calcular_fragmento(data, cfg)
+                ini, d = calcular_fragmento(data, cfg, audio)
                 self.log(f"Fragmento: desde {int(ini // 60)}:{ini % 60:05.2f}, {d:.0f} s.")
                 trabajos += [(fmt, ini, d) for fmt in formatos]
             tono = tono_efectivo(cfg)

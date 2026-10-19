@@ -8,7 +8,8 @@ Pensada para músicos que publican en YouTube, TikTok, Reels o Shorts.
 
 - **Sincroniza la letra sola** con la voz, línea por línea y palabra por palabra. Incluye un editor de tiempos para corregir a mano.
 - **Formatos:** 16:9 (YouTube), 9:16 (TikTok / Reels / Shorts) y 1:1 (Instagram), uno o todos de una vez.
-- **Fragmentos cortos:** primer coro, último coro o desde un minuto exacto, con fundidos de entrada y salida.
+- **Fragmentos cortos:** la mejor parte (automático: la zona más fuerte de la canción, priorizando el coro y empezando al inicio de un verso), primer coro, último coro o desde un minuto exacto, con fundidos de entrada y salida.
+- **Solo audio:** exporta el fragmento como MP3 de 30 s para subirlo como sonido a TikTok o CapCut.
 - **Efectos de letra:** fundido, karaoke palabra por palabra, dos líneas (actual + siguiente), palabra por palabra, máquina de escribir, entrada con "pop" y brillo en el coro.
 - **Color automático de la letra:** clara u oscura según el brillo del fondo, en la zona donde va el texto.
 - **Tono del fondo:** 10 virados de color (dorado, sepia, nocturno, rojo rock…) o automático según el género.
