@@ -99,7 +99,15 @@ def titulo_album(texto, archivo):
     return re.sub(r"[_]+", " ", os.path.splitext(os.path.basename(archivo))[0]).strip().capitalize()
 
 
-def recolectar(raiz):
+def seudonimo_de(texto):
+    """Seudónimo declarado al inicio del archivo (SEUDÓNIMO: / Artista:), o None."""
+    m = re.search(r"(?im)^[*\s]*(seud[oó]nimo|artista)[^:\n]*:\s*(.+)$", texto[:3000])
+    return re.sub(r"[*\"_.]", "", m.group(2)).strip() if m else None
+
+
+def recolectar(raiz, seudonimo="", excluir=()):
+    """Álbumes de la carpeta. Con `seudonimo`, se descartan los archivos que declaran otro;
+    `excluir` son trozos de nombre de archivo a dejar fuera (otros proyectos)."""
     archivos = []
     for d, sub, fs in os.walk(raiz):
         sub[:] = [s for s in sub if s.lower() not in EXCLUIR]
@@ -112,6 +120,11 @@ def recolectar(raiz):
             texto = open(p, encoding="utf-8-sig").read()
         except UnicodeDecodeError:
             texto = open(p, encoding="latin-1").read()
+        if any(x.lower() in os.path.basename(p).lower() for x in excluir):
+            continue
+        declarado = seudonimo_de(texto)
+        if seudonimo and declarado and norm(declarado) != norm(seudonimo):
+            continue
         for titulo, estrofas in canciones_de(texto):
             primeras = [l for _, ls in estrofas for l in ls][:3]
             clave = norm(" ".join(primeras))
@@ -288,9 +301,11 @@ def main():
     ap.add_argument("--seudonimo", default="", help="nombre artístico (opcional)")
     ap.add_argument("--rut", default="", help="RUT o documento del autor (opcional, va en la página legal)")
     ap.add_argument("--nota", default="Letras originales. Todos los derechos reservados.")
+    ap.add_argument("--excluir", nargs="*", default=[],
+                    help="trozos de nombre de archivo a dejar fuera (p. ej. álbumes de otro seudónimo)")
     ap.add_argument("--salida", help="ruta del PDF (por defecto, dentro de la carpeta)")
     a = ap.parse_args()
-    albumes = recolectar(a.carpeta)
+    albumes = recolectar(a.carpeta, a.seudonimo, a.excluir)
     doc, total = generar_html(albumes, a.titulo, a.autor, a.nota, a.seudonimo, a.rut, leer_extras(a.carpeta))
     pdf = a.salida or os.path.join(a.carpeta, a.titulo + ".pdf")
     html_path = os.path.splitext(pdf)[0] + ".html"
