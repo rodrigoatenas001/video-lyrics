@@ -86,7 +86,7 @@ En `plantillas/` hay guías PNG transparentes (16:9, 9:16 y 1:1) que marcan dón
 `cancionero.py` junta todas las letras de una carpeta de álbumes (con subcarpetas) en un solo libro PDF: portada, índice por álbum y una canción por página. Quita las notas de producción y los prompts, y descarta las canciones repetidas entre carpetas. Sirve para registrar las letras como un libro en el DDI.
 
 ```bash
-python cancionero.py "C:\carpeta\de\letras" --titulo "Cancionero" --autor "Tu nombre"
+python cancionero.py "C:\carpeta\de\letras" --titulo "Cancionero" --autor "Tu nombre" --seudonimo "Nombre artístico" --rut "12.345.678-9"
 ```
 
 El PDF se crea con Microsoft Edge (incluido en Windows), que trae las fuentes para hindi, coreano, árabe y chino.

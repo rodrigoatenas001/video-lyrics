@@ -9,7 +9,7 @@ Uso:
 Genera <carpeta>\\Cancionero.html y Cancionero.pdf (PDF con Microsoft Edge, que trae las
 fuentes para hindi, coreano, árabe, etc.).
 """
-import argparse, datetime, html, os, re, shutil, subprocess, tempfile, unicodedata
+import argparse, datetime, html, os, re, shutil, subprocess, tempfile, time, unicodedata
 
 # Si una canción aparece en varias carpetas se usa la versión de la más "terminada"
 PRIORIDAD = ["publicados", "procesados suno", "", "detrabajo", "base discos", "archivados"]
@@ -114,53 +114,88 @@ def recolectar(raiz):
                 continue
             vistos.add(clave)
             album = titulo_album(texto, p)
+            if norm(titulo) in ("single", "sencillo", "letra", "lyrics", ""):  # sencillos: el título es el del archivo
+                titulo = album
             albumes.setdefault(album, []).append((titulo, estrofas))
     return albumes
 
 
+FUENTES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+ACENTO = "#8a5a2b"
+
 CSS = """
-@page { size: A5; margin: 18mm 16mm 20mm; @bottom-center { content: counter(page); } }
-body { font-family: 'Cormorant Garamond', Georgia, 'Nirmala UI', 'Malgun Gothic', 'Segoe UI', serif;
-       font-size: 11pt; line-height: 1.35; color: #111; }
-.portada { height: 170mm; display: flex; flex-direction: column; justify-content: center; text-align: center;
-           page-break-after: always; }
-.portada h1 { font-size: 30pt; margin: 0 0 6mm; font-weight: 500; }
-.portada .autor { font-size: 15pt; } .portada .pie { margin-top: 30mm; font-size: 10pt; color: #444; }
-.legal { page-break-after: always; font-size: 9pt; padding-top: 120mm; }
-.indice { page-break-after: always; font-size: 9.5pt; }
-.indice h2 { font-size: 16pt; font-weight: 500; }
-.indice .alb { margin: 4mm 0 1mm; font-weight: 600; break-after: avoid; }
-.indice ol { margin: 0; padding-left: 7mm; } .indice li { margin: 0; }
-h2.album { page-break-before: always; text-align: center; font-weight: 500; font-size: 17pt; margin-top: 50mm; }
-.cancion { page-break-before: always; }
-.cancion h3 { font-size: 15pt; font-weight: 600; margin: 0 0 1mm; }
-.cancion .num { color: #666; font-size: 9pt; margin-bottom: 5mm; }
-.estrofa { margin: 0 0 3.2mm; break-inside: avoid; } .estrofa .sec { font-style: italic; font-size: 9pt; color: #555; }
-.coro { padding-left: 5mm; font-style: italic; }
+@font-face { font-family: 'Cormorant'; src: url('%(f)s/CormorantGaramond-Medium.ttf'); font-weight: 400 700; }
+@font-face { font-family: 'Cormorant'; src: url('%(f)s/CormorantGaramond-MediumItalic.ttf'); font-style: italic; }
+@page { size: A5; margin: 17mm 16mm 19mm;
+        @bottom-center { content: counter(page); font: 9pt 'Cormorant', Georgia, serif; color: %(a)s; } }
+@page blanca { @bottom-center { content: none; } }
+body { font-family: 'Cormorant', Georgia, 'Nirmala UI', 'Malgun Gothic', 'Microsoft YaHei', 'Segoe UI', serif;
+       font-size: 11.5pt; line-height: 1.38; color: #1d1712; margin: 0; }
+.sc { font-variant: small-caps; letter-spacing: .12em; }
+.regla { width: 14mm; height: 0; border-top: .6pt solid %(a)s; margin: 4mm auto; }
+.portada { page: blanca; height: 99vh; box-sizing: border-box; break-after: page; }
+.portada .marco { height: 100%%; box-sizing: border-box; border: .8pt solid %(a)s; outline: .4pt solid %(a)s;
+                  outline-offset: -2.2mm; display: flex; flex-direction: column; align-items: center;
+                  justify-content: center; text-align: center; padding: 12mm; }
+.portada .etq { color: %(a)s; font-size: 10pt; }
+.portada h1 { font-size: 34pt; font-weight: 500; margin: 3mm 0 0; line-height: 1.05; }
+.portada .orn { color: %(a)s; font-size: 13pt; margin: 7mm 0; letter-spacing: .6em; }
+.portada .autor { font-size: 14pt; } .portada .seud { font-style: italic; font-size: 11pt; color: #5a4a3c; }
+.portada .pie { margin-top: 22mm; font-size: 9.5pt; color: #5a4a3c; }
+.legal { page: blanca; break-after: page; height: 97vh; display: flex; flex-direction: column; justify-content: flex-end;
+         font-size: 9pt; line-height: 1.55; color: #3d332a; }
+.legal b { font-weight: 600; color: #1d1712; }
+.indice { break-after: page; font-size: 9.5pt; line-height: 1.3; }
+.indice h2 { text-align: center; font-weight: 500; font-size: 18pt; margin: 4mm 0 0; }
+.indice .cols { column-count: 2; column-gap: 7mm; margin-top: 6mm; }
+.indice .alb { color: %(a)s; font-size: 9pt; margin: 3.5mm 0 1mm; break-after: avoid; }
+.indice ol { margin: 0; padding-left: 6.5mm; } .indice li { margin: 0; break-inside: avoid; }
+.indice li::marker { color: #9c8a78; font-size: 8pt; }
+.album { break-before: page; page: blanca; height: 90vh; display: flex; flex-direction: column;
+         justify-content: center; text-align: center; }
+.album .etq { color: %(a)s; font-size: 9.5pt; }
+.album h2 { font-weight: 500; font-size: 21pt; margin: 2mm 8mm 0; line-height: 1.15; }
+.album .cuenta { font-style: italic; color: #5a4a3c; font-size: 10.5pt; }
+.cancion { break-before: page; }
+.cancion .etq { color: %(a)s; font-size: 8.5pt; }
+.cancion h3 { font-size: 17pt; font-weight: 600; margin: 1mm 0 0; line-height: 1.15; }
+.cancion .regla { margin: 3.5mm 0 6mm; }
+.estrofa { margin: 0 0 3.6mm; break-inside: avoid; }
+.estrofa .sec { font-variant: small-caps; letter-spacing: .1em; font-size: 8.5pt; color: %(a)s; }
+.coro { border-left: .8pt solid %(a)s; padding-left: 4mm; font-style: italic; }
 """
 
 
-def generar_html(albumes, titulo, autor, nota):
+def generar_html(albumes, titulo, autor, nota, seudonimo="", rut=""):
     e = html.escape
     total = sum(len(c) for c in albumes.values())
-    fecha = datetime.date.today().strftime("%d-%m-%Y")
-    partes = [f"<!doctype html><html lang='es'><head><meta charset='utf-8'><title>{e(titulo)}</title><style>{CSS}</style></head><body>",
-              f"<section class='portada'><h1>{e(titulo)}</h1><div class='autor'>{e(autor)}</div>"
-              f"<div class='pie'>{total} canciones · {len(albumes)} álbumes<br>{fecha}</div></section>",
-              f"<section class='legal'>© {datetime.date.today().year} {e(autor)}. {e(nota)}</section>",
-              "<section class='indice'><h2>Índice</h2>"]
+    hoy = datetime.date.today()
+    css = CSS % {"f": "file:///" + FUENTES.replace("\\", "/"), "a": ACENTO}
+    partes = [f"<!doctype html><html lang='es'><head><meta charset='utf-8'><title>{e(titulo)}</title><style>{css}</style></head><body>",
+              f"<section class='portada'><div class='marco'><div class='etq sc'>Cancionero</div><h1>{e(titulo)}</h1>"
+              f"<div class='orn'>✦ ✦ ✦</div><div class='autor'>{e(autor)}</div>"
+              + (f"<div class='seud'>{e(seudonimo)}</div>" if seudonimo else "")
+              + f"<div class='pie sc'>{total} canciones · {len(albumes)} álbumes · {hoy.year}</div></div></section>",
+              "<section class='legal'>"
+              f"<div><b>{e(titulo)}</b></div><div>Letras originales de {e(autor)}"
+              + (f", bajo el seudónimo «{e(seudonimo)}»" if seudonimo else "") + ".</div>"
+              + (f"<div>RUT {e(rut)}</div>" if rut else "")
+              + f"<div>{total} canciones en {len(albumes)} álbumes.</div><div>Edición: {hoy.strftime('%d-%m-%Y')}</div><br>"
+              f"<div>© {hoy.year} {e(autor)}. {e(nota)}</div></section>",
+              "<section class='indice'><h2>Índice</h2><div class='regla'></div><div class='cols'>"]
     n = 0
     for album, canciones in albumes.items():
-        partes.append(f"<div class='alb'>{e(album)}</div><ol start='{n + 1}'>")
+        partes.append(f"<div class='alb sc'>{e(album)}</div><ol start='{n + 1}'>")
         partes += [f"<li>{e(t)}</li>" for t, _ in canciones]
         partes.append("</ol>"); n += len(canciones)
-    partes.append("</section>")
+    partes.append("</div></section>")
     n = 0
-    for album, canciones in albumes.items():
-        partes.append(f"<h2 class='album'>{e(album)}</h2>")
+    for k, (album, canciones) in enumerate(albumes.items(), 1):
+        partes.append(f"<section class='album'><div class='etq sc'>Álbum {k}</div><h2>{e(album)}</h2>"
+                      f"<div class='regla'></div><div class='cuenta'>{len(canciones)} canciones</div></section>")
         for t, estrofas in canciones:
             n += 1
-            partes.append(f"<article class='cancion'><h3>{e(t)}</h3><div class='num'>{n} · {e(album)}</div>")
+            partes.append(f"<article class='cancion'><div class='etq sc'>{n} · {e(album)}</div><h3>{e(t)}</h3><div class='regla'></div>")
             for sec, ls in estrofas:
                 cls = "estrofa coro" if sec == "Coro" else "estrofa"
                 cab = f"<div class='sec'>{e(sec)}</div>" if sec else ""
@@ -188,6 +223,13 @@ def a_pdf(html_path, pdf_path):
     subprocess.run([nav, "--headless=new", "--disable-gpu", "--no-pdf-header-footer", f"--user-data-dir={perfil}",
                     f"--print-to-pdf={pdf_path}", "file:///" + os.path.abspath(html_path).replace("\\", "/")],
                    capture_output=True, timeout=900)
+    # Edge a veces vuelve antes de terminar: se espera a que el PDF exista y deje de crecer
+    tam, fin = -1, time.time() + 900
+    while time.time() < fin:
+        if os.path.exists(pdf_path) and os.path.getsize(pdf_path) == tam > 0:
+            break
+        tam = os.path.getsize(pdf_path) if os.path.exists(pdf_path) else -1
+        time.sleep(2)
     shutil.rmtree(perfil, ignore_errors=True)
     if not os.path.exists(pdf_path):
         raise RuntimeError("Edge no generó el PDF.")
@@ -197,12 +239,14 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("carpeta")
     ap.add_argument("--titulo", default="Cancionero")
-    ap.add_argument("--autor", default="Resucitado 2025")
+    ap.add_argument("--autor", default="Resucitado 2025", help="nombre legal del autor")
+    ap.add_argument("--seudonimo", default="", help="nombre artístico (opcional)")
+    ap.add_argument("--rut", default="", help="RUT o documento del autor (opcional, va en la página legal)")
     ap.add_argument("--nota", default="Letras originales. Todos los derechos reservados.")
     ap.add_argument("--salida", help="ruta del PDF (por defecto, dentro de la carpeta)")
     a = ap.parse_args()
     albumes = recolectar(a.carpeta)
-    doc, total = generar_html(albumes, a.titulo, a.autor, a.nota)
+    doc, total = generar_html(albumes, a.titulo, a.autor, a.nota, a.seudonimo, a.rut)
     pdf = a.salida or os.path.join(a.carpeta, a.titulo + ".pdf")
     html_path = os.path.splitext(pdf)[0] + ".html"
     open(html_path, "w", encoding="utf-8").write(doc)
