@@ -3,6 +3,7 @@
 /*
 !/.gitignore
 !/lyrics_app.py
+!/cancionero.py
 !/requirements.txt
 !/requirements-voz.txt
 !/requirements-master.txt

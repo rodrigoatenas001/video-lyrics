@@ -81,6 +81,16 @@ La sincronización se guarda junto al audio (`<canción>.lineas.json`), así que
 
 En `plantillas/` hay guías PNG transparentes (16:9, 9:16 y 1:1) que marcan dónde va el logo, dónde va la letra y qué zona tapa la interfaz de TikTok/Reels. Úsalas como capa en Canva o en tu editor.
 
+## Cancionero en PDF
+
+`cancionero.py` junta todas las letras de una carpeta de álbumes (con subcarpetas) en un solo libro PDF: portada, índice por álbum y una canción por página. Quita las notas de producción y los prompts, y descarta las canciones repetidas entre carpetas. Sirve para registrar las letras como un libro en el DDI.
+
+```bash
+python cancionero.py "C:\carpeta\de\letras" --titulo "Cancionero" --autor "Tu nombre"
+```
+
+El PDF se crea con Microsoft Edge (incluido en Windows), que trae las fuentes para hindi, coreano, árabe y chino.
+
 ## Tiempos de referencia
 
 En un PC sin tarjeta gráfica dedicada, para una canción de 4,5 minutos:
