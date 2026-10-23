@@ -14,6 +14,9 @@ import argparse, datetime, html, os, re, shutil, subprocess, tempfile, time, uni
 # Si una canción aparece en varias carpetas se usa la versión de la más "terminada"
 PRIORIDAD = ["publicados", "procesados suno", "", "detrabajo", "base discos", "archivados"]
 EXCLUIR = {"audacity_macros", "suno_bot", "portadas"}
+# Textos opcionales del libro: archivos con estos nombres (.md o .txt) en la carpeta principal
+EXTRAS = ["dedicatoria", "agradecimientos", "prologo", "epilogo"]
+TITULO_EXTRA = {"dedicatoria": "", "agradecimientos": "Agradecimientos", "prologo": "Prólogo", "epilogo": "Epílogo"}
 ETIQUETA = re.compile(r"^\[([^\]]+)\]\s*$")
 NOTA = re.compile(r"^(\*\*|`|>|\||-{3,}|\*[A-ZÁÉÍÓÚ ]+:|[A-ZÁÉÍÓÚ ]{3,}:\s)")
 SECCION_VISIBLE = {"chorus": "Coro", "coro": "Coro", "pre-chorus": "Pre-coro", "bridge": "Puente",
@@ -99,7 +102,8 @@ def recolectar(raiz):
     archivos = []
     for d, sub, fs in os.walk(raiz):
         sub[:] = [s for s in sub if s.lower() not in EXCLUIR]
-        archivos += [os.path.join(d, f) for f in fs if f.lower().endswith((".md", ".txt"))]
+        archivos += [os.path.join(d, f) for f in fs if f.lower().endswith((".md", ".txt"))
+                     and os.path.splitext(f)[0].lower() not in EXTRAS]
     archivos.sort(key=lambda p: (prioridad(p, raiz), p.lower()))
     vistos, albumes = set(), {}
     for p in archivos:
@@ -162,11 +166,38 @@ body { font-family: 'Cormorant', Georgia, 'Nirmala UI', 'Malgun Gothic', 'Micros
 .cancion .regla { margin: 3.5mm 0 6mm; }
 .estrofa { margin: 0 0 3.6mm; break-inside: avoid; }
 .estrofa .sec { font-variant: small-caps; letter-spacing: .1em; font-size: 8.5pt; color: %(a)s; }
+.dedicatoria { break-after: page; page: blanca; height: 80vh; display: flex; flex-direction: column;
+               justify-content: center; text-align: right; font-style: italic; padding-left: 30mm; }
+.texto { break-before: page; break-after: page; }
+.texto h2 { text-align: center; font-weight: 500; font-size: 18pt; margin: 6mm 0 0; }
+.texto p { text-align: justify; text-indent: 6mm; margin: 0 0 2.5mm; hyphens: auto; }
+.texto p:first-of-type { text-indent: 0; }
 .coro { border-left: .8pt solid %(a)s; padding-left: 4mm; font-style: italic; }
 """
 
 
-def generar_html(albumes, titulo, autor, nota, seudonimo="", rut=""):
+def leer_extras(carpeta):
+    """{nombre: [párrafos]} de dedicatoria, prólogo, etc., si existen en la carpeta."""
+    out = {}
+    for n in EXTRAS:
+        for ext in (".md", ".txt"):
+            p = os.path.join(carpeta, n + ext)
+            if os.path.exists(p):
+                texto = open(p, encoding="utf-8-sig").read()
+                out[n] = [re.sub(r"^#+\s*", "", b).strip() for b in re.split(r"\n\s*\n", texto) if b.strip()]
+                break
+    return out
+
+
+def html_extra(nombre, parrafos):
+    e = html.escape
+    if nombre == "dedicatoria":
+        return "<section class='dedicatoria'>" + "".join(f"<p>{e(x)}</p>" for x in parrafos) + "</section>"
+    return (f"<section class='texto'><h2>{TITULO_EXTRA[nombre]}</h2><div class='regla'></div>"
+            + "".join(f"<p>{'<br>'.join(e(l) for l in x.splitlines())}</p>" for x in parrafos) + "</section>")
+
+
+def generar_html(albumes, titulo, autor, nota, seudonimo="", rut="", extras=None):
     e = html.escape
     total = sum(len(c) for c in albumes.values())
     hoy = datetime.date.today()
@@ -182,6 +213,7 @@ def generar_html(albumes, titulo, autor, nota, seudonimo="", rut=""):
               + (f"<div>RUT {e(rut)}</div>" if rut else "")
               + f"<div>{total} canciones en {len(albumes)} álbumes.</div><div>Edición: {hoy.strftime('%d-%m-%Y')}</div><br>"
               f"<div>© {hoy.year} {e(autor)}. {e(nota)}</div></section>",
+              *[html_extra(n, x) for n, x in (extras or {}).items() if n != "epilogo"],
               "<section class='indice'><h2>Índice</h2><div class='regla'></div><div class='cols'>"]
     n = 0
     for album, canciones in albumes.items():
@@ -201,6 +233,8 @@ def generar_html(albumes, titulo, autor, nota, seudonimo="", rut=""):
                 cab = f"<div class='sec'>{e(sec)}</div>" if sec else ""
                 partes.append(f"<div class='{cls}'>{cab}{'<br>'.join(e(l) for l in ls)}</div>")
             partes.append("</article>")
+    if extras and "epilogo" in extras:
+        partes.append(html_extra("epilogo", extras["epilogo"]))
     partes.append("</body></html>")
     return "\n".join(partes), total
 
@@ -246,7 +280,7 @@ def main():
     ap.add_argument("--salida", help="ruta del PDF (por defecto, dentro de la carpeta)")
     a = ap.parse_args()
     albumes = recolectar(a.carpeta)
-    doc, total = generar_html(albumes, a.titulo, a.autor, a.nota, a.seudonimo, a.rut)
+    doc, total = generar_html(albumes, a.titulo, a.autor, a.nota, a.seudonimo, a.rut, leer_extras(a.carpeta))
     pdf = a.salida or os.path.join(a.carpeta, a.titulo + ".pdf")
     html_path = os.path.splitext(pdf)[0] + ".html"
     open(html_path, "w", encoding="utf-8").write(doc)
