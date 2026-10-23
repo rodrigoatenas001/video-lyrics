@@ -33,6 +33,7 @@ def limpiar_titulo(t):
     t = re.sub(r"^#+\s*", "", t).strip()
     t = re.sub(r"^(\d+|[IVX]+)\s*[.)\-–—:]\s*", "", t)
     t = re.sub(r"^(canci[oó]n|track|tema)\s*\d+\s*[:.\-–—]\s*", "", t, flags=re.I)
+    t = re.split(r"\s*(?:[★☆✓✔✅⭐]|\(?demo lista)", t, flags=re.I)[0]  # marcas de trabajo, no del título
     t = t.split(" | ")[0].strip("*_ ").strip()
     if t.isupper():
         t = t.title()
