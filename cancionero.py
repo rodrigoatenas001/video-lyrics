@@ -173,6 +173,8 @@ body { font-family: 'Cormorant', Georgia, 'Nirmala UI', 'Malgun Gothic', 'Micros
 .texto h2 { text-align: center; font-weight: 500; font-size: 18pt; margin: 6mm 0 0; }
 .texto p { text-align: justify; text-indent: 6mm; margin: 0 0 2.5mm; hyphens: auto; }
 .texto p:first-of-type { text-indent: 0; }
+.texto .firma { text-align: right; font-style: italic; margin-top: 6mm; }
+.dedicatoria p { margin: 0 0 4mm; }
 .coro { border-left: .8pt solid %(a)s; padding-left: 4mm; font-style: italic; }
 """
 
@@ -192,10 +194,16 @@ def leer_extras(carpeta):
 
 def html_extra(nombre, parrafos):
     e = html.escape
+    lineas = lambda x: "<br>".join(e(l.strip()) for l in x.splitlines())
     if nombre == "dedicatoria":
-        return "<section class='dedicatoria'>" + "".join(f"<p>{e(x)}</p>" for x in parrafos) + "</section>"
+        return "<section class='dedicatoria'>" + "".join(f"<p>{lineas(x)}</p>" for x in parrafos) + "</section>"
+    # un último párrafo de líneas cortas es la firma: va a la derecha
+    ult = parrafos[-1].splitlines() if parrafos else []
+    firma = len(parrafos) > 1 and len(ult) <= 3 and all(len(l) < 45 for l in ult)
+    cuerpo = parrafos[:-1] if firma else parrafos
     return (f"<section class='texto'><h2>{TITULO_EXTRA[nombre]}</h2><div class='regla'></div>"
-            + "".join(f"<p>{'<br>'.join(e(l) for l in x.splitlines())}</p>" for x in parrafos) + "</section>")
+            + "".join(f"<p>{lineas(x)}</p>" for x in cuerpo)
+            + (f"<div class='firma'>{lineas(parrafos[-1])}</div>" if firma else "") + "</section>")
 
 
 def generar_html(albumes, titulo, autor, nota, seudonimo="", rut="", extras=None):
@@ -255,6 +263,8 @@ def a_pdf(html_path, pdf_path):
         raise RuntimeError("No encontré Microsoft Edge ni Chrome para crear el PDF; abre el HTML e imprímelo como PDF.")
     perfil = tempfile.mkdtemp()  # perfil aparte: funciona aunque Edge esté abierto
     pdf_path = os.path.abspath(pdf_path)
+    if os.path.exists(pdf_path):  # si no, la espera de abajo vería el PDF viejo como terminado
+        os.remove(pdf_path)
     subprocess.run([nav, "--headless=new", "--disable-gpu", "--no-pdf-header-footer", f"--user-data-dir={perfil}",
                     f"--print-to-pdf={pdf_path}", "file:///" + os.path.abspath(html_path).replace("\\", "/")],
                    capture_output=True, timeout=900)
