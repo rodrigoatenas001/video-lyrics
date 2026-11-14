@@ -816,13 +816,14 @@ def entradas(fondo, audio, logo, inicio=0.0, zoom=False):
     return es_video, ent
 
 
-def vista_previa(fondo, logo, ass_path, w, h, paleta, cfg, png):
+def vista_previa(fondo, logo, ass_path, w, h, paleta, cfg, png, caja=None):
     """Un fotograma con la letra de muestra, reducido para mostrar en la ventana."""
     # Un solo fotograma: el movimiento del fondo no se nota y prepararlo es lento, así que se omite aquí
     cfg = dict(cfg, zoom_on=False)
     es_video, ent = entradas(fondo, None, logo)
     g = grafo_filtros(w, h, paleta, cfg, es_video, bool(logo))
-    g = g[:-3] + f",scale=-2:{360 if w >= h else 480}[v]"
+    mw, mh = caja or (640, 360 if w >= h else 480)  # cabe entera en el espacio disponible de la ventana
+    g = g[:-3] + f",scale={mw}:{mh}:force_original_aspect_ratio=decrease[v]"
     r = run([FFMPEG, "-y", "-v", "error", *ent, "-filter_complex", g, "-map", "[v]",
              "-ss", "1.5", "-frames:v", "1", png], cwd=os.path.dirname(ass_path))
     if r.returncode:
@@ -1260,8 +1261,8 @@ class App(BaseTk):
                              relief="groove", bd=2, height=3, bg="#f3ede4", fg="#5a4630", font=("Segoe UI", 10))
         self.zona.pack(fill="x", padx=12, pady=(12, 0))
         cuerpo = ttk.Frame(self); cuerpo.pack(fill="both", expand=True)
+        self.construir_previa(cuerpo)  # primero: así la vista previa conserva su espacio en ventanas angostas
         izq = ttk.Frame(cuerpo, padding=12); izq.pack(side="left", fill="both", expand=True)
-        self.construir_previa(cuerpo)
 
         nb = ttk.Notebook(izq); nb.pack(fill="x")
         self.entradas = {}
@@ -1518,10 +1519,26 @@ class App(BaseTk):
         fr = ttk.Frame(pv); fr.pack()
         for k in FORMATOS:
             ttk.Radiobutton(fr, text=k, value=k, variable=self.prev_fmt).pack(side="left", padx=6)
-        self.prev_img = ttk.Label(pv, text="Elige un fondo para ver\ncómo queda la letra.", anchor="center", width=60)
+        self.prev_img = ttk.Label(pv, text="Elige un fondo para ver\ncómo queda la letra.", anchor="center")
         self.prev_img.pack(expand=True, pady=6)
         self.prev_info = ttk.Label(pv, text="", foreground="#7a6046"); self.prev_info.pack()
         ttk.Button(pv, text="Actualizar vista previa", command=self.actualizar_previa).pack(pady=6)
+        self.prev_panel, self._prev_tam = pv, None
+
+        def al_cambiar_tamano(ev):  # al achicar o agrandar la ventana, rehace la vista previa a la medida
+            tam = (ev.width // 40, ev.height // 40)
+            if self._prev_tam and tam != self._prev_tam:
+                self.programar_previa()
+            self._prev_tam = tam
+        pv.bind("<Configure>", al_cambiar_tamano)
+
+    def caja_previa(self):
+        """Ancho y alto disponibles para la imagen de la vista previa."""
+        self.update_idletasks()
+        # Se mide sobre la ventana (no sobre el panel, que se ajusta a la imagen) para no entrar en bucle
+        ancho = max(220, int(self.winfo_width() * 0.36))
+        alto = max(160, self.prev_panel.winfo_height() - 130)
+        return min(ancho, 640), min(alto, 640)
 
     # --- configuración persistente ---
     def cargar_config(self):
@@ -1660,9 +1677,10 @@ class App(BaseTk):
             return
         cfg, muestra, logos = self.ajustes(), self.texto_muestra(), self.logos_activos()
         self.prev_info.configure(text="Generando…")
-        threading.Thread(target=self._previa, args=(fondo, logos, fmt, cfg, muestra), daemon=True).start()
+        caja = self.caja_previa()
+        threading.Thread(target=self._previa, args=(fondo, logos, fmt, cfg, muestra, caja), daemon=True).start()
 
-    def _previa(self, fondo, logos, fmt, cfg, muestra):
+    def _previa(self, fondo, logos, fmt, cfg, muestra, caja=None):
         try:
             w, h = FORMATOS[fmt][:2]
             td = tempfile.mkdtemp()
@@ -1673,7 +1691,7 @@ class App(BaseTk):
             ass, png = os.path.join(td, "subs.ass"), os.path.join(td, "prev.png")
             pt = elegir_paleta(cfg["color"], fondo, w, h, "Centro") if cfg["titulo_on"] else None
             crear_ass([], w, h, cfg, paleta, ass, muestra=muestra, paleta_titulo=pt)
-            vista_previa(fondo, logo, ass, w, h, paleta, cfg, png)
+            vista_previa(fondo, logo, ass, w, h, paleta, cfg, png, caja)
 
             def mostrar():
                 self._foto = tk.PhotoImage(file=png)
