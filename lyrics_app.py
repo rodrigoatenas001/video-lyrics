@@ -95,6 +95,8 @@ def leer_letra(path):
     raw_lines = [l.strip() for l in open(path, encoding="utf8")]
     first = next((l for l in raw_lines if l), "")
     for raw in raw_lines:
+        if re.fullmatch(r"-{3,}|_{3,}|\*{3,}", raw) or raw.lower().startswith("licencia:"):
+            break  # separador: lo que sigue (licencia, créditos, notas) no es letra
         if not raw or (raw == first and not raw.startswith("[") and raw.isupper()):
             continue
         if raw.startswith("[") and raw.endswith("]"):
