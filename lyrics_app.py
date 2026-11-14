@@ -89,29 +89,76 @@ def norm(t):
     return re.findall(r"[a-zñ]+", t)
 
 
-def leer_letra(path):
-    """Devuelve [{text, section}]; ignora el título y las etiquetas [Sección]."""
+def _texto(path):
+    try:
+        return open(path, encoding="utf-8-sig").read()
+    except UnicodeDecodeError:
+        return open(path, encoding="latin-1").read()
+
+
+def _cancion_del_archivo(path, audio=None):
+    """(título, [{text, section}]) usando el mismo lector que el cancionero.
+
+    Entiende archivos de álbum con varias canciones bajo títulos «#» y notas de producción
+    (**FUENTE:**, **PROMPT SUNO:**, tablas…). Si hay varias, elige la que coincide con el
+    nombre del audio. Devuelve None si el archivo no tiene ese formato.
+    """
+    import cancionero
+    canciones = cancionero.canciones_de(_texto(path))
+    if not canciones:
+        return None
+    elegida = canciones[0]
+    if audio and len(canciones) > 1:
+        base = cancionero.limpiar_titulo(re.sub(r"\(.*?\)", "", os.path.splitext(os.path.basename(audio))[0]))
+        elegida = max(canciones, key=lambda c: difflib.SequenceMatcher(
+            None, cancionero.norm(c[0]), cancionero.norm(base)).ratio())
+    titulo, estrofas = elegida
+    lineas = []
+    for sec, ts in estrofas:
+        for t in ts:
+            if t.lower().startswith(("licencia:", "license:", "©")):
+                return titulo, lineas  # desde aquí son créditos, no letra
+            lineas.append({"text": t, "section": sec or ""})
+    return titulo, lineas
+
+
+NOTA = re.compile(r"^(\*\*|`|>|\||\*[A-ZÁÉÍÓÚ ]+:|[A-ZÁÉÍÓÚ ]{3,}:\s)")
+
+
+def leer_letra(path, audio=None):
+    """Devuelve [{text, section}] solo con la letra cantada (sin título, etiquetas ni notas)."""
+    c = _cancion_del_archivo(path, audio)
+    if c:
+        return c[1]
     lines, section = [], ""
-    raw_lines = [l.strip() for l in open(path, encoding="utf8")]
+    raw_lines = [l.strip() for l in _texto(path).splitlines()]
     first = next((l for l in raw_lines if l), "")
+    hay_etiquetas = any(re.fullmatch(r"\[[^\]]+\]", l) for l in raw_lines)
+    empezo = not hay_etiquetas  # con etiquetas, la letra empieza en la primera [Sección]
     for raw in raw_lines:
         if re.fullmatch(r"-{3,}|_{3,}|\*{3,}", raw) or raw.lower().startswith("licencia:"):
-            break  # separador: lo que sigue (licencia, créditos, notas) no es letra
-        if not raw or (raw == first and not raw.startswith("[") and raw.isupper()):
+            if lines:
+                break  # separador al final: lo que sigue (licencia, créditos) no es letra
             continue
         if raw.startswith("[") and raw.endswith("]"):
-            section = raw.strip("[]")
+            section, empezo = raw.strip("[]"), True
             continue
-        lines.append({"text": raw.lstrip("#").strip(), "section": section})
+        if not empezo or not raw or (raw == first and raw.isupper()) or raw.startswith("#") or NOTA.match(raw):
+            continue
+        lines.append({"text": raw.strip("*_ "), "section": section})
     return lines
 
 
-def leer_titulo(path):
-    """Título de la canción si la letra empieza con una línea en mayúsculas."""
+def leer_titulo(path, audio=None):
+    """Título de la canción: el encabezado «#» de la canción o una primera línea en mayúsculas."""
     try:
-        for l in open(path, encoding="utf8"):
-            l = l.strip().lstrip("#").strip()
+        c = _cancion_del_archivo(path, audio)
+        if c:
+            return c[0]
+        for l in _texto(path).splitlines():
+            l = l.strip()
             if l:
+                l = l.lstrip("#").strip()
                 return l.title() if l.isupper() and not l.startswith("[") else ""
     except OSError:
         pass
@@ -163,7 +210,7 @@ def separar_voz(audio_path, log):
 
 
 def sincronizar(audio_path, letra_path, modelo, log, voz=False):
-    lines = leer_letra(letra_path)
+    lines = leer_letra(letra_path, audio_path)
     log(f"Letra: {len(lines)} líneas. Cargando audio…")
     dur, pcm = audio_duracion_y_pcm(audio_path)
     if voz and demucs_disponible():
@@ -438,7 +485,7 @@ def estilo_de(section):
         return "Coro"
     if s.startswith("bridge") or s.startswith("puente"):
         return "Puente"
-    if s.startswith("outro") or s.startswith("intro"):
+    if s.startswith(("outro", "intro", "final")):
         return "Outro"
     return "Verso"
 
@@ -556,6 +603,28 @@ def crear_ass(lines, w, h, cfg, paleta, path, muestra=None, paleta_titulo=None):
         cy = int(h * 0.42) if abajo else int(h * 0.5)
         out.append(f"Dialogue: 1,{ass_time(0.3)},{ass_time(fin)},Titulo,,0,0,0,,"
                    f"{{\\fad(700,700)\\pos({w // 2},{cy})}}{txt}")
+
+    # Rótulo fijo (canción y álbum) en la esquina superior contraria al logo, todo el video
+    if cfg.get("rotulo_on") and (cfg.get("titulo", "").strip() or cfg.get("album", "").strip()):
+        logo_izq = cfg.get("logo_on") and "izquierda" in cfg.get("logo_esquina", "")
+        m = int(min(w, h) * 0.04)
+        an, x = (7, m) if (cfg.get("logo_on") and not logo_izq and "derecha" in cfg.get("logo_esquina", "")) \
+            else (9, w - m)
+        s1, s2 = int(min(w, h) * 0.05), int(min(w, h) * 0.032)
+        partes = []
+        if cfg.get("titulo", "").strip():
+            partes.append(f"{{\\fs{s1}\\fsp0}}{limpiar(cfg['titulo'].strip())}")
+        if cfg.get("album", "").strip():
+            partes.append(f"{{\\fs{s2}\\fsp{int(s2 * 0.18)}}}{limpiar(cfg['album'].strip().upper())}")
+        tit_fin = 0.3
+        if cfg.get("titulo_on") and cfg.get("titulo", "").strip():  # aparece cuando se va el título grande
+            primera = lines[0]["start"] if lines else 6
+            tit_fin = 9 if muestra else max(2.5, min(6.0, primera - 0.4))
+        ini = 0 if muestra else tit_fin
+        fin_r = (lines[-1]["end"] if lines else 0) + 60
+        out.append(f"Dialogue: 2,{ass_time(ini)},{ass_time(fin_r)},Titulo,,0,0,0,,"
+                   f"{{\\an{an}\\pos({x},{m})\\fad(900,0)\\alpha&H40&\\bord{max(1, s1 // 18)}\\shad{max(1, s1 // 25)}}}"
+                   + "\\N".join(partes))
 
     efecto = cfg.get("efecto", EFECTOS[0])
     karaoke = efecto.startswith("Karaoke")
@@ -1243,6 +1312,8 @@ class App(BaseTk):
         self.titulo_on = tk.BooleanVar(value=c.get("titulo_on", False))
         self.titulo = tk.StringVar()
         self.subtitulo = tk.StringVar(value=c.get("subtitulo", "Sencillo"))
+        self.rotulo_on = tk.BooleanVar(value=c.get("rotulo_on", False))
+        self.album = tk.StringVar(value=c.get("album", ""))
         self.zoom_on = tk.BooleanVar(value=c.get("zoom_on", False))
         self.logo_on = tk.BooleanVar(value=c.get("logo_on", False))
         self.logo_esquina = tk.StringVar(value=c.get("logo_esquina", ESQUINAS[0]))
@@ -1280,7 +1351,7 @@ class App(BaseTk):
         self.txt = tk.Text(izq, height=8, state="disabled", wrap="word"); self.txt.pack(fill="both", expand=True, pady=8)
 
         for var in (*[self.v[k] for k in ("fondo_16:9", "fondo_9:16", "fondo_1:1", "letra", "logo", "logo_oscuro")],
-                    self.prev_fmt, self.fuente, self.pos, self.color, self.tamano, self.efecto, self.pop_on, self.brillo_on, self.tono, self.tono_intensidad, self.genero, self.titulo_on, self.titulo,
+                    self.prev_fmt, self.fuente, self.pos, self.color, self.tamano, self.efecto, self.pop_on, self.brillo_on, self.tono, self.tono_intensidad, self.genero, self.titulo_on, self.titulo, self.rotulo_on, self.album,
                     self.subtitulo, self.zoom_on, self.logo_on, self.logo_esquina, self.logo_tamano, self.logo_opacidad):
             var.trace_add("write", lambda *a: self.programar_previa())
         self.activar_dnd()
@@ -1444,7 +1515,11 @@ class App(BaseTk):
         ttk.Entry(f, textvariable=self.subtitulo).grid(row=1, column=1, sticky="ew", padx=6)
         ttk.Label(f, text="   Título").grid(row=2, column=0, sticky="w", pady=3)
         ttk.Entry(f, textvariable=self.titulo).grid(row=2, column=1, sticky="ew", padx=6)
-        ttk.Separator(f).grid(row=3, column=0, columnspan=4, sticky="ew", pady=8)
+        fr = ttk.Frame(f); fr.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(6, 8))
+        ttk.Checkbutton(fr, text="Rótulo fijo con canción y álbum (esquina contraria al logo)",
+                        variable=self.rotulo_on).pack(side="left")
+        ttk.Label(fr, text="   Álbum").pack(side="left")
+        ttk.Entry(fr, textvariable=self.album).pack(side="left", fill="x", expand=True, padx=6)
         ttk.Checkbutton(f, text="Movimiento lento del fondo (solo imágenes)", variable=self.zoom_on).grid(row=4, column=0, columnspan=2, sticky="w")
         ttk.Separator(f).grid(row=5, column=0, columnspan=4, sticky="ew", pady=8)
         ttk.Checkbutton(f, text="Logo / sello de agua", variable=self.logo_on).grid(row=6, column=0, columnspan=2, sticky="w")
@@ -1554,6 +1629,7 @@ class App(BaseTk):
                     color=self.color.get(), modelo=self.modelo.get(), prev_fmt=self.prev_fmt.get(),
                     formatos=[k for k, v in self.fmt_on.items() if v.get()],
                     titulo_on=self.titulo_on.get(), titulo=self.titulo.get(), subtitulo=self.subtitulo.get(),
+                    rotulo_on=self.rotulo_on.get(), album=self.album.get(),
                     zoom_on=self.zoom_on.get(), logo_on=self.logo_on.get(), logo=self.v["logo"].get(), logo_oscuro=self.v["logo_oscuro"].get(),
                     logo_esquina=self.logo_esquina.get(), logo_tamano=int(self.logo_tamano.get()),
                     logo_opacidad=int(self.logo_opacidad.get()), ultima_carpeta=self.ultima, genero=self.genero.get(), destino_ia=self.destino_ia.get(),
@@ -1606,8 +1682,9 @@ class App(BaseTk):
         self.ultima = os.path.dirname(p)
         if key == "audio" and not self.v["salida"].get():
             self.v["salida"].set(os.path.splitext(p)[0] + " - lyrics.mp4")
-        if key == "letra":
-            t = leer_titulo(p)
+        letra = self.v["letra"].get().strip()
+        if key == "letra" or (key == "audio" and letra):  # con el audio se sabe qué canción del álbum es
+            t = leer_titulo(letra, self.v["audio"].get().strip())
             if t and self.titulo.get() in ("", self._titulo_auto):
                 self.titulo.set(t); self._titulo_auto = t
             self.detectar_tema()
@@ -1657,7 +1734,7 @@ class App(BaseTk):
     # --- vista previa ---
     def texto_muestra(self):
         try:
-            lineas = leer_letra(self.v["letra"].get())
+            lineas = leer_letra(self.v["letra"].get(), self.v["audio"].get().strip())
             textos = [l["text"] for l in lineas]
             coro = [i for i, l in enumerate(lineas) if estilo_de(l["section"]) == "Coro"]
             i = max(coro or range(len(textos)), key=lambda k: len(textos[k]))
@@ -1761,7 +1838,7 @@ class App(BaseTk):
             if cfg.get("master_on"):  # la sincronización usa la mezcla; todo lo que se exporta, el master
                 audio = masterizar(audio, cfg.get("referencia"), self.log)
                 hechos.append(audio)
-            exportar_lrc(data["lineas"], leer_titulo(letra), base + ".lrc")
+            exportar_lrc(data["lineas"], leer_titulo(letra, audio), base + ".lrc")
             ini_c, d_c = calcular_fragmento(data, cfg, audio)
             exportar_info_soundon(ini_c, d_c, cfg["frag_modo"], base + " SoundOn.txt")
             hechos += [base + ".lrc", base + " SoundOn.txt"]
