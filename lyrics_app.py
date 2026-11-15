@@ -229,8 +229,8 @@ def sincronizar(audio_path, letra_path, modelo, log, voz=False):
                                condition_on_previous_text=False)
     wtok, wtime = [], []
     for s in segs:
-        # En voz cantada no_speech_prob sale alto aun con letra real: solo cuenta si además el texto es dudoso
-        if ALUCINACION.search(s.text) or (s.no_speech_prob > 0.7 and s.avg_logprob < -1.0):
+        # No usar no_speech_prob: en voz cantada sale alto (~0.8) aun con letra real
+        if ALUCINACION.search(s.text):
             log(f"  {s.start:6.1f}s  (descartado, Whisper lo inventó en un tramo sin voz: {s.text.strip()[:45]})")
             continue
         log(f"  {s.start:6.1f}s  {s.text.strip()[:60]}")
