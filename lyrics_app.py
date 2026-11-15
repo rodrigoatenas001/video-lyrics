@@ -772,6 +772,101 @@ def aplicar_tono(fondo, w, h, cfg, carpeta):
     return out
 
 
+# ---------- Miniatura para YouTube ----------
+
+def _ajustar_texto(draw, texto, fuente_path, max_w, tam_max, tam_min, max_lineas=2):
+    """(fuente, líneas) con el mayor tamaño que cabe en max_w usando hasta max_lineas líneas."""
+    from PIL import ImageFont
+    palabras = texto.split()
+    # Primero en una sola línea si cabe grande; si no, en varias
+    for tam in range(tam_max, int(tam_max * 0.62), -4):
+        f = ImageFont.truetype(fuente_path, tam)
+        if draw.textlength(texto, font=f) <= max_w:
+            return f, [texto]
+    for tam in range(tam_max, tam_min - 1, -4):
+        f = ImageFont.truetype(fuente_path, tam)
+        lineas, actual = [], ""
+        for p in palabras:
+            prueba = (actual + " " + p).strip()
+            if draw.textlength(prueba, font=f) <= max_w or not actual:
+                actual = prueba
+            else:
+                lineas.append(actual); actual = p
+        lineas.append(actual)
+        if len(lineas) <= max_lineas and all(draw.textlength(l, font=f) <= max_w for l in lineas):
+            return f, lineas
+    return f, lineas
+
+
+def crear_miniatura(fondo, cfg, logo, salida, carpeta):
+    """Miniatura 1280x720 (JPG < 2 MB, lo que pide YouTube) con el fondo, el logo, la canción y el álbum."""
+    from PIL import Image, ImageDraw, ImageFilter, ImageFont
+    W, H = 1280, 720
+    base = aplicar_tono(fondo, W, H, cfg, carpeta)  # mismo recorte y tono que el video
+    if base == fondo:  # sin tono (o fondo de video): solo recorte
+        base = os.path.join(carpeta, "mini_fondo.png")
+        r = run([FFMPEG, "-y", "-v", "error", "-i", fondo, "-frames:v", "1", "-vf",
+                 f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}", base])
+        if r.returncode:
+            raise RuntimeError(r.stderr.decode("utf8", "ignore")[-300:])
+    img = Image.open(base).convert("RGB")
+
+    # Velo oscuro de izquierda a derecha y desde abajo, para que el texto se lea siempre
+    velo = Image.new("L", (W, H))
+    pv = velo.load()
+    for x in range(W):
+        a = max(0.0, 1 - x / (W * 0.75)) * 175
+        for y in range(H):
+            pv[x, y] = int(min(215, a + max(0.0, (y - H * 0.55) / (H * 0.45)) * 90))
+    img = Image.composite(Image.new("RGB", (W, H), (8, 6, 4)), img, velo)
+    d = ImageDraw.Draw(img)
+
+    serif = os.path.join(FONTS_DIR, "CormorantGaramond-Medium.ttf")
+    sans = r"C:\Windows\Fonts\seguisb.ttf" if os.path.exists(r"C:\Windows\Fonts\seguisb.ttf") else serif
+    margen = 64
+    titulo = (cfg.get("titulo") or "").strip()
+    album = (cfg.get("album") or "").strip()
+    ante = (cfg.get("mini_etiqueta") or "").strip()
+
+    f_tit, lineas = _ajustar_texto(d, titulo, serif, W * 0.66, 156, 70)
+    f_alb = ImageFont.truetype(sans, 34)
+    f_ante = ImageFont.truetype(sans, 28)
+    paso = int(f_tit.size * 0.98)                     # interlineado del título
+    asc = f_tit.getbbox("ÁÉ")[1]                      # espacio vacío sobre las mayúsculas acentuadas
+    alto_tit = paso * (len(lineas) - 1) + f_tit.getbbox("Ag")[3] - asc
+    y_alb = H - margen - (40 if album else 0)
+    y = y_alb - (26 if album else 0) - alto_tit - asc  # y de dibujo de la primera línea
+    if ante:  # etiqueta pequeña sobre el título, p. ej. «VIDEO CON LETRA»
+        d.text((margen + 4, y + asc - 52), " ".join(ante.upper()), font=f_ante, fill=(214, 172, 88))
+
+    capa = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    dc = ImageDraw.Draw(capa)
+    for i, l in enumerate(lineas):  # sombra difusa del título
+        dc.text((margen + 4, y + i * paso + 6), l, font=f_tit, fill=(0, 0, 0, 200))
+    capa = capa.filter(ImageFilter.GaussianBlur(8))
+    img.paste(capa, (0, 0), capa)
+    d = ImageDraw.Draw(img)
+    for i, l in enumerate(lineas):
+        d.text((margen, y + i * paso), l, font=f_tit, fill=(250, 242, 228), stroke_width=2, stroke_fill=(20, 14, 8))
+    if album:
+        d.line((margen + 2, y_alb + 20, margen + 90, y_alb + 20), fill=(214, 172, 88), width=3)
+        d.text((margen + 104, y_alb), album.upper(), font=f_alb, fill=(232, 200, 120))
+
+    if logo:  # misma marca de agua que el video, arriba a la izquierda
+        lg = Image.open(logo).convert("RGBA")
+        lw = int(W * 0.26)
+        lg = lg.resize((lw, int(lg.height * lw / lg.width)), Image.LANCZOS)
+        img.paste(lg, (margen - 20, margen - 30), lg)
+
+    calidad = 92
+    while True:
+        img.save(salida, "JPEG", quality=calidad, optimize=True)
+        if os.path.getsize(salida) < 2 * 1024 * 1024 or calidad <= 60:
+            break
+        calidad -= 8
+    return salida
+
+
 # ---------- Logo sin fondo ----------
 
 def leer_rgba(path):
@@ -1310,6 +1405,8 @@ class App(BaseTk):
         self.pop_on = tk.BooleanVar(value=c.get("pop_on", False))
         self.brillo_on = tk.BooleanVar(value=c.get("brillo_on", False))
         self.mp3_on = tk.BooleanVar(value=c.get("mp3_on", True))
+        self.mini_on = tk.BooleanVar(value=c.get("mini_on", True))
+        self.mini_etiqueta = tk.StringVar(value=c.get("mini_etiqueta", "Video con letra"))
         self.master_on = tk.BooleanVar(value=c.get("master_on", True))
         self.v["referencia"] = tk.StringVar(value=c.get("referencia", ""))
         self.karaoke_ajuste = tk.DoubleVar(value=c.get("karaoke_ajuste", 0.0))
@@ -1578,6 +1675,14 @@ class App(BaseTk):
                   foreground="#7a6046").grid(row=8, column=1, sticky="w", padx=6)
         ttk.Checkbutton(f, text="Incluir siempre el audio del fragmento en MP3 (sonido para TikTok)",
                         variable=self.mp3_on).grid(row=10, column=1, sticky="w", padx=6, pady=(8, 0))
+        fm = ttk.Frame(f); fm.grid(row=11, column=1, sticky="ew", padx=6, pady=(8, 0))
+        ttk.Checkbutton(fm, text="Miniatura para YouTube (JPG 1280×720)", variable=self.mini_on).pack(side="left")
+        ttk.Label(fm, text="  etiqueta").pack(side="left")
+        ttk.Entry(fm, textvariable=self.mini_etiqueta, width=18).pack(side="left", padx=4)
+        self.btn_mini = ttk.Button(fm, text="Crear solo la miniatura", command=self.miniatura_ahora)
+        self.btn_mini.pack(side="left", padx=6)
+        ttk.Label(f, text="Usa el fondo 16:9, el tono, el logo, el título (pestaña Extras) y el álbum del rótulo.",
+                  foreground="#7a6046").grid(row=12, column=1, sticky="w", padx=6)
         for var in (self.exportar, self.frag_modo):
             var.trace_add("write", lambda *a: self.estado_fragmento())
         self.estado_fragmento()
@@ -1638,6 +1743,7 @@ class App(BaseTk):
                     formatos=[k for k, v in self.fmt_on.items() if v.get()],
                     titulo_on=self.titulo_on.get(), titulo=self.titulo.get(), subtitulo=self.subtitulo.get(),
                     rotulo_on=self.rotulo_on.get(), album=self.album.get(),
+                    mini_on=self.mini_on.get(), mini_etiqueta=self.mini_etiqueta.get(),
                     zoom_on=self.zoom_on.get(), logo_on=self.logo_on.get(), logo=self.v["logo"].get(), logo_oscuro=self.v["logo_oscuro"].get(),
                     logo_esquina=self.logo_esquina.get(), logo_tamano=int(self.logo_tamano.get()),
                     logo_opacidad=int(self.logo_opacidad.get()), ultima_carpeta=self.ultima, genero=self.genero.get(), destino_ia=self.destino_ia.get(),
@@ -1836,6 +1942,34 @@ class App(BaseTk):
         self.ocupado(True)
         threading.Thread(target=self.trabajo, args=(formatos, self.ajustes()), daemon=True).start()
 
+    def hacer_miniatura(self, cfg):
+        """Crea la miniatura junto al video y devuelve su ruta."""
+        fondo = self.fondo_para("16:9")
+        if not fondo:
+            raise RuntimeError("Falta un fondo para la miniatura.")
+        base = os.path.splitext(self.v["salida"].get().strip())[0] if self.v["salida"].get().strip() \
+            else os.path.splitext(fondo)[0]
+        td = tempfile.mkdtemp()
+        logo = elegir_logo(fondo, 1280, 720, dict(cfg, logo_tamano=26, logo_esquina="Arriba izquierda"),
+                           *self.logos_activos())[0] if cfg.get("logo_on") else None
+        salida = crear_miniatura(fondo, cfg, logo, base + " - miniatura.jpg", td)
+        self.log(f"   ✔ {salida}")
+        return salida
+
+    def miniatura_ahora(self):
+        cfg = self.ajustes()
+        if not cfg.get("titulo", "").strip():
+            messagebox.showwarning("Falta el título", "Escribe el título de la canción en la pestaña Extras."); return
+
+        def tarea():
+            try:
+                self.log("Creando miniatura…")
+                p = self.hacer_miniatura(cfg)
+                self.after(0, lambda: os.startfile(p))
+            except Exception as e:
+                self.log(f"✖ Error: {e}")
+        threading.Thread(target=tarea, daemon=True).start()
+
     def trabajo(self, formatos, cfg):
         hechos = []
         try:
@@ -1846,6 +1980,11 @@ class App(BaseTk):
             if cfg.get("master_on"):  # la sincronización usa la mezcla; todo lo que se exporta, el master
                 audio = masterizar(audio, cfg.get("referencia"), self.log)
                 hechos.append(audio)
+            if cfg.get("mini_on") and cfg.get("titulo", "").strip() and self.fondo_para("16:9"):
+                try:
+                    hechos.append(self.hacer_miniatura(cfg))
+                except Exception as e:
+                    self.log(f"⚠ No se pudo crear la miniatura: {e}")
             exportar_lrc(data["lineas"], leer_titulo(letra, audio), base + ".lrc")
             ini_c, d_c = calcular_fragmento(data, cfg, audio)
             exportar_info_soundon(ini_c, d_c, cfg["frag_modo"], base + " SoundOn.txt")
