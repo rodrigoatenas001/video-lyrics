@@ -209,6 +209,11 @@ def separar_voz(audio_path, log):
     return voz16
 
 
+# Frases que Whisper "inventa" en silencios o partes instrumentales (vienen de subtítulos de internet)
+ALUCINACION = re.compile(r"www\.|https?:|\.com|amara\.org|alimmenta|subt[ií]tulos? (realizados|por)|"
+                         r"suscr[ií]bete|gracias por ver|m[aá]s informaci[oó]n", re.I)
+
+
 def sincronizar(audio_path, letra_path, modelo, log, voz=False):
     lines = leer_letra(letra_path, audio_path)
     log(f"Letra: {len(lines)} líneas. Cargando audio…")
@@ -224,6 +229,9 @@ def sincronizar(audio_path, letra_path, modelo, log, voz=False):
                                condition_on_previous_text=False)
     wtok, wtime = [], []
     for s in segs:
+        if ALUCINACION.search(s.text) or getattr(s, "no_speech_prob", 0) > 0.7:
+            log(f"  {s.start:6.1f}s  (descartado, Whisper lo inventó en un tramo sin voz: {s.text.strip()[:45]})")
+            continue
         log(f"  {s.start:6.1f}s  {s.text.strip()[:60]}")
         for w in s.words:
             for t in norm(w.word):
